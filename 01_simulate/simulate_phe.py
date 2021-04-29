@@ -1,4 +1,5 @@
-from admix.data import read_int_mat, write_int_mat
+from numpy.lib.arraysetops import isin
+from admix.data import allele_count_per_anc
 import pandas as pd
 from os.path import join
 import numpy as np
@@ -7,31 +8,6 @@ from os.path import exists, join
 from utils import *
 import fire
 import zarr
-
-
-def allele_count_per_anc(hap: np.ndarray, lanc: np.ndarray, n_anc: int):
-    """Get allele count per ancestry
-
-    Parameters
-    ----------
-    hap : np.ndarray
-        haplotype (n_indiv, n_snp, n_anc)
-    lanc : np.ndarray
-        local ancestry (n_indiv, n_snp, n_anc)
-    """
-    assert np.all(hap.shape == lanc.shape), "shape of `hap` and `lanc` are not equal"
-    assert hap.ndim == 3, "`hap` and `lanc` should have three dimension"
-    n_indiv, n_snp, n_haplo = hap.shape
-    assert n_haplo == 2, "`n_haplo` should equal to 2, check your data"
-    geno = np.zeros((n_indiv, n_snp, n_anc), dtype=np.int8)
-
-    for i_haplo in range(n_haplo):
-        haplo_hap = hap[:, :, i_haplo]
-        haplo_lanc = lanc[:, :, i_haplo]
-        for i_anc in range(n_anc):
-            geno[:, :, i_anc][haplo_lanc == i_anc] += haplo_hap[haplo_lanc == i_anc]
-
-    return geno
 
 
 def simulate_phenotype(
@@ -108,9 +84,22 @@ def simulate_phenotype(
 
 def main(geno, var_g, var_e, gamma, out_prefix, p_causal=1.0, n_sim=100, seed=1234):
     np.random.seed(seed)
-    dataset = zarr.load(geno)
-    admix_hap = dataset["hap"]
-    admix_lanc = dataset["lanc"]
+
+    print("Receiving geno =", geno)
+    datasets = []
+    if isinstance(geno, list):
+        for g in geno:
+            datasets.append(zarr.load(g))
+    elif isinstance(geno, str):
+        datasets.append(zarr.load(geno))
+    else:
+        raise NotImplementedError
+
+    admix_hap = np.hstack([d["hap"] for d in datasets])
+    admix_lanc = np.hstack([d["lanc"] for d in datasets])
+    print("shape of admix_hap:", admix_hap.shape)
+    print("shape of admix_lanc:", admix_lanc.shape)
+
     assert np.all(admix_hap.shape == admix_lanc.shape)
     n_indiv = admix_hap.shape[0]
     n_snp = admix_hap.shape[1]

@@ -1,14 +1,12 @@
-dataset_prefix=01_simple
+geno_id=$1
+param_prefix=$2
 
-mkdir -p 03_estimate/${dataset_prefix}/he_estimate
 
-for gamma in 0.0 0.05 0.08 0.1; do
-    param_prefix=gamma_${gamma}
+phen=02_phe/${geno_id}/${param_prefix}.phen
+mkdir -p 03_estimate/${geno_id}/he_estimate
+grm_dir=03_estimate/${geno_id}/grm
 
-    grm_dir=03_estimate/${dataset_prefix}/grm
-    phen=02_simulate/${dataset_prefix}/${param_prefix}.phen
-    python estimate_he.py \
-        --grm_dir ${grm_dir} \
-        --phen ${phen} \
-        --out 03_estimate/${dataset_prefix}/he_estimate/${param_prefix}.csv    
-done
+python he_estimate.py \
+    --grm_dir ${grm_dir} \
+    --phen ${phen} \
+    --out 03_estimate/${geno_id}/he_estimate/${param_prefix}.csv

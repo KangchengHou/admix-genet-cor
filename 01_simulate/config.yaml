@@ -1,0 +1,7 @@
+experiments:
+  simple:
+    geno: "01_geno/01_simple/admix.zarr"
+  chr1chr2_20_80:
+    geno: "['01_geno/02_genomewide/admix-simu/out/format_data/chr1_20_80.zarr','01_geno/02_genomewide/admix-simu/out/format_data/chr2_20_80.zarr']"
+  chr1chr2_50_50:
+    geno: "['01_geno/02_genomewide/admix-simu/out/format_data/chr1_50_50.zarr','01_geno/02_genomewide/admix-simu/out/format_data/chr2_50_50.zarr']"
