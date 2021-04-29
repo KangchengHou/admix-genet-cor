@@ -10,7 +10,7 @@ i_sim=${SGE_TASK_ID}
 dataset_prefix=01_simple
 # param_prefix=gamma_0.1
 
-out_dir=./03_estimate/${dataset_prefix}/gcta_estimate/
+out_dir=./03_estimate/${dataset_prefix}/gcta_estimate/${param_prefix}
 grm_dir=./03_estimate/${dataset_prefix}/grm
 pheno_dir=02_simulate/${dataset_prefix}/
 mkdir ${out_dir}
