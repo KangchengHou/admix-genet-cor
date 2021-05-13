@@ -65,6 +65,15 @@ def cli_build_grm(geno, out_prefix, n_anc=2):
 
     with open(out_prefix + "mgrm.txt", "w") as f:
         f.writelines("\n".join(names))
+    
+    # addition of all GRMs, used for likelihood ratio test
+    K_full = sum(Ks)
+    write_grm(
+        out_prefix + "K_full",
+        K=K_full,
+        df_id=pd.DataFrame({"0": np.arange(n_indiv), "1": np.arange(n_indiv)}),
+        n_snps=np.repeat(n_snp, n_indiv),
+    )
 
 
 if __name__ == "__main__":
