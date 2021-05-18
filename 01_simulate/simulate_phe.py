@@ -82,8 +82,19 @@ def simulate_phenotype(
     return betas, phe_g, phe
 
 
-def main(geno, var_g, var_e, gamma, out_prefix, p_causal=1.0, n_sim=100, seed=1234):
-    np.random.seed(seed)
+def main(
+    geno,
+    var_g,
+    var_e,
+    gamma,
+    out_prefix,
+    indiv_subset=None,
+    snp_subset=None,
+    p_causal=1.0,
+    n_sim=100,
+    seed=1234,
+):
+    # np.random.seed(seed)
 
     print("Receiving geno =", geno)
     datasets = []
@@ -97,6 +108,15 @@ def main(geno, var_g, var_e, gamma, out_prefix, p_causal=1.0, n_sim=100, seed=12
 
     admix_hap = np.hstack([d["hap"] for d in datasets])
     admix_lanc = np.hstack([d["lanc"] for d in datasets])
+    if indiv_subset is not None:
+        indiv_subset = np.loadtxt(indiv_subset, dtype=int)
+        admix_hap = admix_hap[indiv_subset, :, :]
+        admix_lanc = admix_lanc[indiv_subset, :, :]
+    if snp_subset is not None:
+        snp_subset = np.loadtxt(snp_subset, dtype=int)
+        admix_hap = admix_hap[:, snp_subset, :]
+        admix_lanc = admix_lanc[:, snp_subset, :]
+
     print("shape of admix_hap:", admix_hap.shape)
     print("shape of admix_lanc:", admix_lanc.shape)
 
@@ -120,13 +140,7 @@ def main(geno, var_g, var_e, gamma, out_prefix, p_causal=1.0, n_sim=100, seed=12
     for i_sim in range(phe.shape[1]):
         df_phen[f"phen_{i_sim}"] = phe[:, i_sim]
     df_phen = pd.DataFrame(df_phen)
-    df_phen.to_csv(
-        out_prefix + ".phen",
-        sep="\t",
-        index=False,
-        header=False
-        # , float_format="%.6f"
-    )
+    df_phen.to_csv(out_prefix + ".phen", sep="\t", index=False, header=False)
 
 
 if __name__ == "__main__":

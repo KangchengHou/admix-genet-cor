@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #$ -cwd
-#$ -l h_data=10G,h_rt=0:30:00,highp
+#$ -l h_data=10G,h_rt=0:10:00,highp
 #$ -j y
 #$ -o ./job_out
 #$ -t 1-100
@@ -16,7 +16,8 @@ out_dir=03_estimate/${geno_id}/gcta_estimate/${param_prefix}
 
 mkdir -p ${out_dir}
 
-gcta_path=../gcta64
+gcta_path=../gcta_nr_robust
+# gcta_path=../gcta64
 
 ./${gcta_path} --reml --mgrm ${grm_dir}/mgrm.txt \
     --pheno ${pheno_dir}/${param_prefix}.phen \
