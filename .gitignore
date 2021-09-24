@@ -1,5 +1,8 @@
+dask-worker-space/
 gcta64
+gcta_nr_robust
 job_out
+out/
 
 # Jupyter Notebook
 .ipynb_checkpoints
