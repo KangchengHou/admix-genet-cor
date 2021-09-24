@@ -9,8 +9,10 @@ import fire
 from os.path import join
 from typing import List
 import fire
+import statsmodels.api as sm
 
-def load_hm3(
+# PAGE analysis
+def load_page_hm3(
     chrom=None,
     GENO_DIR="/u/project/pasaniuc/pasaniucdata/admixture/projects/PAGE-QC/s03_aframr/dataset/hm3.zarr/",
     PHENO_DIR="/u/project/sgss/PAGE/phenotype/",
@@ -106,6 +108,23 @@ def load_hm3(
 
     for col in ["center", "study", "race_ethnicity"]:
         dset[f"{col}@indiv"] = dset[f"{col}@indiv"].astype(str)
+    
+    
+    # format the dataset to follow the new standards
+    for k in dset.data_vars.keys():
+        if k.endswith("@indiv"):
+            dset.coords[k.split("@")[0]] = ("indiv", dset.data_vars[k].data)
+        if k.endswith("@snp"):
+            dset.coords[k.split("@")[0]] = ("snp", dset.data_vars[k].data)
+    dset = dset.drop_vars(
+        [
+            k
+            for k in dset.data_vars.keys()
+            if (k.endswith("@indiv") or k.endswith("@snp"))
+        ]
+    )
+
+    dset = dset.rename({n : n.split('@')[0] for n in [k for k in dset.coords.keys()]})
 
     return dset
 
@@ -126,6 +145,36 @@ def concat_grm(out_dir="out/admix_grm"):
     np.save(join(out_dir, "K1.all.npy"), K1 / n_total_snp)
     np.save(join(out_dir, "K2.all.npy"), K2 / n_total_snp)
     np.save(join(out_dir, "K12.all.npy"), K12 / n_total_snp)
+
+    
+
+# loci heterogeneity analysis
+    
+def simulate_het(apa, beta, cov):
+    cov_effects = np.random.normal(loc=0, scale=0.1, size=cov.shape[1])
+    y = (
+        np.dot(apa, beta)
+        + np.dot(cov, cov_effects)
+        + np.random.normal(size=apa.shape[0])
+    )
+    return y
+
+
+def test_het(apa, y, cov):
+    design = sm.add_constant(np.hstack([apa, cov]))
+    model = sm.OLS(y, design).fit()
+
+    A = np.zeros([1, len(model.params)])
+    A[0, 1] = 1
+    A[0, 2] = -1
+    p_ftest = model.f_test(A).pvalue.item()
+    return p_ftest, model
+
+
+def test_assoc(apa, y, cov):
+    design = sm.add_constant(np.hstack([apa.sum(axis=1)[:, np.newaxis], cov]))
+    model = sm.OLS(y, design).fit()
+    return model.pvalues[1], model
 
 
 if __name__ == "__main__":
