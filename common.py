@@ -160,8 +160,25 @@ def simulate_het(apa, beta, cov):
     return y
 
 
-def test_het(apa, y, cov):
-    design = sm.add_constant(np.hstack([apa, cov]))
+def test_het(apa, y, cov=None):
+    """
+    Heterogeneity test for a single SNP
+    
+    Parameters
+    ----------
+    apa: (n_snp, 2)
+    y: (n_indiv, )
+    cov: (n_indiv, cov)
+    
+    Returns
+    -------
+    p-value and model
+    """
+    if cov is None:
+        design = sm.add_constant(apa)
+    else:
+        design = sm.add_constant(np.hstack([apa, cov]))
+        
     model = sm.OLS(y, design).fit()
 
     A = np.zeros([1, len(model.params)])
