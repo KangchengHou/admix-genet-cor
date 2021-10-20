@@ -1,19 +1,18 @@
 from dask.distributed import Client, progress
 
-client = Client(processes=False, threads_per_worker=2, n_workers=1, memory_limit="45GB")
+client = Client(processes=False, threads_per_worker=2, n_workers=1, memory_limit="24GB")
 
 import xarray as xr
 import numpy as np
 import admix
 import matplotlib.pyplot as plt
-from utils import *
 import dask
 import dask.array as da
 import fire
 
 
 def compute_admix_grm(chrom):
-    dset = load_hm3(chrom=chrom)
+    dset = admix.data.load_lab_dataset("page_eur_afr_hm3", chrom=chrom)
 
     admix.tools.admix_grm(dset, center=True)
     dset["A1"] = (

@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #$ -cwd
-#$ -l rh7,h_data=120G,h_rt=4:00:00
+#$ -l h_data=50G,h_rt=1:00:00,highp
 #$ -j y
 #$ -o ./job_out
 #$ -t 1-22

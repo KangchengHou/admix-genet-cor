@@ -1,6 +1,6 @@
 #!/bin/bash -l
 #$ -cwd
-#$ -l h_data=60G,h_rt=0:30:00
+#$ -l h_data=10G,h_rt=0:30:00
 #$ -j y
 #$ -o ./job_out
 #$ -t 1-24
