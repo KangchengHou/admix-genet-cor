@@ -306,7 +306,7 @@ def compute_grm(
         apa_chunk = apa[start:stop, :, :].compute()
 
         # multiply by the prior variance on each SNP
-        apa_chunk *= np.sqrt(snp_prior_var)[start : stop, None]
+        apa_chunk *= np.sqrt(snp_prior_var[start:stop])[:, None, None]
         a1_chunk, a2_chunk = apa_chunk[:, :, 0], apa_chunk[:, :, 1]
 
         K1 += np.dot(a1_chunk.T, a1_chunk) / sum(snp_prior_var)
