@@ -1,9 +1,13 @@
+*.npy
+*.tsv
+*.egg-info
+submitit-logs/
 dask-worker-space/
 gcta64
 gcta_nr_robust
 job_out
 out/
-
+OLD*/
 # Jupyter Notebook
 .ipynb_checkpoints
 

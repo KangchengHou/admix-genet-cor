@@ -10,7 +10,7 @@ from scipy import linalg
 from tqdm import tqdm
 
 
-def af_per_anc(dset: xr.Dataset, inplace=True) -> Optional[np.ndarray]:
+def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
     """
     Calculate allele frequency per ancestry
 
@@ -24,35 +24,29 @@ def af_per_anc(dset: xr.Dataset, inplace=True) -> Optional[np.ndarray]:
     List[np.ndarray]
         `n_anc` length list of allele frequencies.
     """
-    assert "geno" in dset.data_vars, "`geno` not in `ds.data_vars`"
-    assert "lanc" in dset.data_vars, "`lanc` not in `ds.data_vars`"
-    n_anc = dset.attrs["n_anc"]
-    geno = dset.data_vars["geno"]
-    lanc = dset.data_vars["lanc"]
-    rls = []
+    assert np.all(geno.shape == lanc.shape)
+    n_snp = geno.shape[0]
+    af = np.zeros((n_snp, n_anc))
 
-    for i_anc in range(n_anc):
-        # mask SNPs with local ancestry not `i_anc`
-        rls.append(
-            da.ma.getdata(
-                da.ma.masked_where(lanc != i_anc, geno).mean(axis=(1, 2))
-            ).compute()
-        )
-    rls = da.from_array(np.array(rls)).T
-    if inplace:
-        dset["af_per_anc"] = xr.DataArray(
-            rls,
-            dims=(
-                "snp",
-                "anc",
-            ),
-        )
-        return None
-    else:
-        return rls
+    snp_chunks = geno.chunks[0]
+    indices = np.insert(np.cumsum(snp_chunks), 0, 0)
+
+    for i in tqdm(range(len(indices) - 1), desc="admix_genet_cor.af_per_anc"):
+        start, stop = indices[i], indices[i + 1]
+        geno_chunk = geno[start:stop, :, :].compute()
+        lanc_chunk = lanc[start:stop, :, :].compute()
+
+        for anc_i in range(n_anc):
+            # mask SNPs with local ancestry not `i_anc`
+            af[start:stop, anc_i] = (
+                np.ma.masked_where(lanc_chunk != anc_i, geno_chunk)
+                .mean(axis=(1, 2))
+                .data
+            )
+    return af
 
 
-def allele_per_anc(ds, center=False, inplace=True):
+def allele_per_anc(geno, lanc, center=False, n_anc=2):
     """Get allele count per ancestry
 
     Parameters
@@ -67,9 +61,6 @@ def allele_per_anc(ds, center=False, inplace=True):
     -------
     Return allele counts per ancestries
     """
-    geno, lanc = ds.data_vars["geno"].data, ds.data_vars["lanc"].data
-
-    n_anc = ds.attrs["n_anc"]
     assert np.all(geno.shape == lanc.shape), "shape of `hap` and `lanc` are not equal"
     assert geno.ndim == 3, "`hap` and `lanc` should have three dimension"
     n_snp, n_indiv, n_haplo = geno.shape
@@ -108,11 +99,7 @@ def allele_per_anc(ds, center=False, inplace=True):
         return apa
 
     if center:
-        if inplace:
-            af_per_anc(ds, inplace=True)
-            af = ds.data_vars["af_per_anc"].data
-        else:
-            af = af_per_anc(ds, inplace=False)
+        af = af_per_anc(geno=geno, lanc=lanc)
         # rechunk so that all chunk of `n_anc` is passed into the helper function
         assert (
             n_anc == 2
@@ -121,6 +108,9 @@ def allele_per_anc(ds, center=False, inplace=True):
         assert (
             geno.chunks == lanc.chunks
         ), "`geno` and `lanc` should have the same chunk size"
+
+        if not isinstance(af, da.Array):
+            af = da.from_array(af)
 
         af = af.rechunk({0: geno.chunks[0], 1: n_anc})
 
@@ -146,16 +136,13 @@ def allele_per_anc(ds, center=False, inplace=True):
             lanc,
             dtype=np.float64,
         )
-    if inplace:
-        ds["allele_per_anc"] = xr.DataArray(
-            rls_allele_per_anc, dims=("snp", "indiv", "anc")
-        )
-    else:
-        return rls_allele_per_anc
+    return rls_allele_per_anc
 
 
 def simulate_continuous_pheno(
-    dset: xr.Dataset,
+    geno,
+    lanc,
+    n_anc=2,
     var_g: float = None,
     var_e: float = None,
     gamma: float = None,
@@ -163,6 +150,7 @@ def simulate_continuous_pheno(
     beta: np.ndarray = None,
     cov_cols: List[str] = None,
     cov_effects: List[float] = None,
+    snp_prior_var: np.ndarray = None,
     n_sim=10,
 ) -> dict:
     """Simulate continuous phenotype of admixed individuals [continuous]
@@ -201,14 +189,11 @@ def simulate_continuous_pheno(
     phe: np.ndarray
         simulated phenotype (n_indiv, n_sim)
     """
-    n_anc = dset.n_anc
     assert n_anc == 2, "Only two-ancestry currently supported"
 
     # TODO: center or not is really critical here, and should be carefully thought
-    if "allele_per_anc" not in dset.data_vars:
-        allele_per_anc(dset, center=True)
+    apa = allele_per_anc(geno, lanc, center=True)
 
-    apa = dset.data_vars["allele_per_anc"]
     n_snp, n_indiv = apa.shape[0:2]
 
     # simulate effect sizes
@@ -235,7 +220,10 @@ def simulate_continuous_pheno(
                 cov=expected_cov,
                 size=n_causal,
             )
-            # normalize to expected covariance structure
+
+            # TODO: somewhere here add some
+            # normalize to expected covariance structure to
+            # reduce the variance due to randomness
             empirical_cov = np.dot(i_beta.T, i_beta) / n_causal
             i_beta = i_beta * np.sqrt(np.diag(expected_cov) / np.diag(empirical_cov))
 
@@ -254,9 +242,17 @@ def simulate_continuous_pheno(
             # replicate `beta` for each simulation
             beta = np.repeat(beta[:, :, np.newaxis], n_sim, axis=2)
 
-    pheno_g = da.zeros([n_indiv, n_sim])
-    for i_anc in range(n_anc):
-        pheno_g += da.dot(apa[:, :, i_anc].T, beta[:, i_anc, :])
+    pheno_g = np.zeros([n_indiv, n_sim])
+    snp_chunks = apa.chunks[0]
+    indices = np.insert(np.cumsum(snp_chunks), 0, 0)
+
+    for i in tqdm(
+        range(len(indices) - 1), desc="admix_genet_cor.simulate_continuous_pheno"
+    ):
+        start, stop = indices[i], indices[i + 1]
+        apa_chunk = apa[start:stop, :, :].compute()
+        for i_anc in range(n_anc):
+            pheno_g += np.dot(apa_chunk[:, :, i_anc].T, beta[start:stop, i_anc, :])
 
     pheno_e = np.zeros(pheno_g.shape)
     for i_sim in range(n_sim):
@@ -265,9 +261,11 @@ def simulate_continuous_pheno(
         )
 
     pheno = pheno_g + pheno_e
-    pheno_g, pheno = dask.compute((pheno_g, pheno))[0]
+
+    # pheno_g, pheno = dask.compute((pheno_g, pheno))[0]
     # if `cov_cols` are specified, add the covariates to the phenotype
     if cov_cols is not None:
+        assert False, "TODO"
         # if `cov_effects` are not set, set to random normal values
         if cov_effects is None:
             cov_effects = np.random.normal(size=len(cov_cols))
@@ -277,18 +275,13 @@ def simulate_continuous_pheno(
             cov_values[:, i_cov] = dset[cov_col].values
         pheno += np.dot(cov_values, cov_effects).reshape((n_indiv, 1))
 
-    return {
-        "beta": beta,
-        "pheno_g": pheno_g,
-        "pheno": pd.DataFrame(
-            pheno, index=dset.indiv.values, columns=[f"SIM_{i}" for i in range(n_sim)]
-        ),
-        "cov_effects": cov_effects,
-    }
+    return {"beta": beta, "pheno_g": pheno_g, "pheno": pheno}
 
 
 def compute_grm(
-    dset,
+    geno,
+    lanc,
+    n_anc=2,
     center: bool = False,
 ):
     """Calculate ancestry specific GRM matrix
@@ -312,13 +305,10 @@ def compute_grm(
             ancestry specific GRM matrix for cross term of the 1st and 2nd ancestry
     """
 
-    geno = dset["geno"].data
-    lanc = dset["lanc"].data
-    n_anc = dset.attrs["n_anc"]
     assert n_anc == 2, "only two-way admixture is implemented"
     assert np.all(geno.shape == lanc.shape)
 
-    apa = allele_per_anc(dset, center=center, inplace=False).astype(float)
+    apa = allele_per_anc(geno, lanc, center=center).astype(float)
 
     n_snp, n_indiv = apa.shape[0:2]
 
@@ -341,7 +331,8 @@ def compute_grm(
 
 
 def estimate_genetic_cor(
-    dset: xr.Dataset,
+    A1,
+    A2,
     pheno: np.ndarray,
     cov_cols: List[str] = None,
     cov_intercept: bool = True,
@@ -364,10 +355,11 @@ def estimate_genetic_cor(
     cov_intercept: bool, optional
         Whether to include intercept in covariate matrix.
     """
-    n_indiv = dset.dims["indiv"]
+    assert np.all(A1.shape == A2.shape), "`A1` and `A2` must have the same shape"
+    n_indiv = A1.shape[0]
 
-    # build the covariate matrix
     if cov_cols is not None:
+        assert False, "TODO"
         cov_values = np.zeros((n_indiv, len(cov_cols)))
         for i_cov, cov_col in enumerate(cov_cols):
             cov_values[:, i_cov] = dset[cov_col].values
@@ -394,10 +386,8 @@ def estimate_genetic_cor(
 
     pheno = np.dot(cov_proj_mat, pheno)
     quad_form_func = lambda x, A: np.dot(np.dot(x.T, A), x)
-    n_indiv = dset.dims["indiv"]
-    n_snp = dset.dims["snp"]
 
-    grm_list = [dset["A1"].data, dset["A2"].data, np.eye(n_indiv)]
+    grm_list = [A1, A2, np.eye(n_indiv)]
     grm_list = [np.dot(grm, cov_proj_mat) for grm in grm_list]
 
     # multiply cov_proj_mat
@@ -410,7 +400,7 @@ def estimate_genetic_cor(
                 design[j, i] = design[i, j]
 
     rls_list: List[Tuple] = []
-    for i_pheno in range(n_pheno):
+    for i_pheno in tqdm(range(n_pheno)):
         response = np.zeros(n_grm)
         for i in range(n_grm):
             response[i] = quad_form_func(pheno[:, i_pheno], grm_list[i])
