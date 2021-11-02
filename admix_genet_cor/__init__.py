@@ -6,11 +6,15 @@ import dask
 import pandas as pd
 from scipy import linalg
 from tqdm import tqdm
+from .locus import test_snp_het, test_snp_assoc
 
 
 def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
     """
     Calculate allele frequency per ancestry
+
+    If at one particular SNP locus, no SNP from one particular ancestry can be found
+    the corresponding entries will be filled with np.NaN.
 
     Parameters
     ----------
@@ -29,7 +33,7 @@ def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
     snp_chunks = geno.chunks[0]
     indices = np.insert(np.cumsum(snp_chunks), 0, 0)
 
-    for i in tqdm(range(len(indices) - 1), desc="admix_genet_cor.af_per_anc"):
+    for i in range(len(indices) - 1):
         start, stop = indices[i], indices[i + 1]
         geno_chunk = geno[start:stop, :, :].compute()
         lanc_chunk = lanc[start:stop, :, :].compute()
@@ -38,9 +42,10 @@ def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
             # mask SNPs with local ancestry not `i_anc`
             af[start:stop, anc_i] = (
                 np.ma.masked_where(lanc_chunk != anc_i, geno_chunk)
-                .mean(axis=(1, 2))
+                .sum(axis=(1, 2))
                 .data
-            )
+            ) / np.sum(lanc_chunk == anc_i, axis=(1, 2))
+
     return af
 
 
@@ -72,12 +77,28 @@ def allele_per_anc(geno, lanc, center=False, n_anc=2):
     geno = geno.rechunk({2: 2})
     lanc = lanc.rechunk({2: 2})
 
-    # TODO: align the chunk size along 1st axis to be the same
+    # rechunk so that all chunk of `n_anc` is passed into the helper function
+    assert (
+        n_anc == 2
+    ), "`n_anc` should be 2, NOTE: not so clear what happens when `n_anc = 3`"
 
-    def helper(geno_chunk, lanc_chunk, n_anc, af_chunk=None):
+    assert (
+        geno.chunks == lanc.chunks
+    ), "`geno` and `lanc` should have the same chunk size"
+
+    assert (
+        len(geno.chunks[1]) == 1
+    ), "geno / lanc should not be chunked across individual dimension"
+
+    def helper(geno_chunk, lanc_chunk, n_anc, center):
 
         n_snp, n_indiv, n_haplo = geno_chunk.shape
-        assert af_chunk.shape[0] == n_snp
+        if center:
+            af_chunk = af_per_anc(
+                da.from_array(geno_chunk), da.from_array(lanc_chunk), n_anc=n_anc
+            )
+        else:
+            af_chunk = None
         apa = np.zeros((n_snp, n_indiv, n_anc), dtype=np.float64)
         for i_haplo in range(n_haplo):
             haplo_hap = geno_chunk[:, :, i_haplo]
@@ -89,51 +110,21 @@ def allele_per_anc(geno, lanc, center=False, n_anc=2):
                     ]
                 else:
                     # for each SNP, find the corresponding allele frequency
-                    apa[:, :, i_anc][haplo_lanc == i_anc] += haplo_hap[
-                        haplo_lanc == i_anc
-                    ] - af_chunk[np.where(haplo_lanc == i_anc)[0], :, i_anc].squeeze(
-                        axis=1
+                    apa[:, :, i_anc][haplo_lanc == i_anc] += (
+                        haplo_hap[haplo_lanc == i_anc]
+                        - af_chunk[np.where(haplo_lanc == i_anc)[0], i_anc]
                     )
         return apa
 
-    if center:
-        af = af_per_anc(geno=geno, lanc=lanc)
-        # rechunk so that all chunk of `n_anc` is passed into the helper function
-        assert (
-            n_anc == 2
-        ), "`n_anc` should be 2, NOTE: not so clear what happens when `n_anc = 3`"
+    rls_allele_per_anc = da.map_blocks(
+        lambda geno_chunk, lanc_chunk: helper(
+            geno_chunk=geno_chunk, lanc_chunk=lanc_chunk, n_anc=n_anc, center=center
+        ),
+        geno,
+        lanc,
+        dtype=np.float64,
+    )
 
-        assert (
-            geno.chunks == lanc.chunks
-        ), "`geno` and `lanc` should have the same chunk size"
-
-        if not isinstance(af, da.Array):
-            af = da.from_array(af)
-
-        af = af.rechunk({0: geno.chunks[0], 1: n_anc})
-
-        rls_allele_per_anc = da.map_blocks(
-            lambda geno_chunk, lanc_chunk, af_chunk: helper(
-                geno_chunk=geno_chunk,
-                lanc_chunk=lanc_chunk,
-                n_anc=n_anc,
-                af_chunk=af_chunk,
-            ),
-            geno,
-            lanc,
-            af[:, None, :],
-            dtype=np.float64,
-        )
-
-    else:
-        rls_allele_per_anc = da.map_blocks(
-            lambda geno_chunk, lanc_chunk: helper(
-                geno_chunk=geno_chunk, lanc_chunk=lanc_chunk, n_anc=n_anc
-            ),
-            geno,
-            lanc,
-            dtype=np.float64,
-        )
     return rls_allele_per_anc
 
 
@@ -142,11 +133,12 @@ def simulate_continuous_pheno(
     lanc,
     n_anc=2,
     hsq: float = None,
-    cor: float = 1,
+    cor: float = None,
     n_causal: int = None,
     beta: np.ndarray = None,
     snp_prior_var: np.ndarray = None,
     n_sim=10,
+    apa_center=False,
 ) -> dict:
     """Simulate continuous phenotype of admixed individuals [continuous]
 
@@ -185,17 +177,23 @@ def simulate_continuous_pheno(
         simulated phenotype (n_indiv, n_sim)
     """
     assert n_anc == 2, "Only two-ancestry currently supported"
-
-    # TODO: center or not is really critical here, and should be carefully thought
-    apa = allele_per_anc(geno, lanc, center=True)
+    apa = allele_per_anc(geno, lanc, center=apa_center)
     n_snp, n_indiv = apa.shape[0:2]
-    assert (-1 <= cor) and (cor <= 1), "Correlation parameter should be between [-1, 1]"
+
     # simulate effect sizes
     if beta is None:
+        if cor is None:
+            cor = 1.0
 
         if n_causal is None:
             # n_causal = n_snp if `n_causal` is not specified
             n_causal = n_snp
+
+        assert (-1 <= cor) and (
+            cor <= 1
+        ), "Correlation parameter should be between [-1, 1]"
+
+        assert n_causal <= n_snp, "n_causal must be <= n_snp"
 
         if snp_prior_var is None:
             snp_prior_var = np.ones(n_snp)
@@ -218,9 +216,9 @@ def simulate_continuous_pheno(
             for i_anc in range(n_anc):
                 beta[cau, i_anc, i_sim] = i_beta[:, i_anc]
     else:
-        assert (
-            (hsq is None) and (cor is None) and (n_causal is None)
-        ), "If `beta` is specified, `hsq`, `cor`, and `n_causal` must be specified"
+        assert (cor is None) and (
+            n_causal is None
+        ), "If `beta` is specified, `cor`, and `n_causal` must not be specified"
         assert beta.shape == (n_snp, n_anc) or beta.shape == (
             n_snp,
             n_anc,
@@ -257,13 +255,7 @@ def simulate_continuous_pheno(
     return {"beta": beta, "pheno_g": pheno_g, "pheno": pheno}
 
 
-def compute_grm(
-    geno,
-    lanc,
-    n_anc=2,
-    snp_prior_var=None,
-    center: bool = False,
-):
+def compute_grm(geno, lanc, n_anc=2, snp_prior_var=None, apa_center=False):
     """Calculate ancestry specific GRM matrix
 
     Parameters
@@ -288,7 +280,7 @@ def compute_grm(
     assert n_anc == 2, "only two-way admixture is implemented"
     assert np.all(geno.shape == lanc.shape)
 
-    apa = allele_per_anc(geno, lanc, center=center).astype(float)
+    apa = allele_per_anc(geno, lanc, center=apa_center)
     n_snp, n_indiv = apa.shape[0:2]
 
     if snp_prior_var is None:
@@ -320,8 +312,7 @@ def estimate_genetic_cor(
     A1,
     A2,
     pheno: np.ndarray,
-    cov_cols: List[str] = None,
-    cov_intercept: bool = True,
+    cov: np.ndarray = None,
 ):
     """Estimate genetic correlation given a dataset, phenotypes, and covariates.
     This is a very specialized function that tailed for estimating the genetic correlation
@@ -344,24 +335,12 @@ def estimate_genetic_cor(
     assert np.all(A1.shape == A2.shape), "`A1` and `A2` must have the same shape"
     n_indiv = A1.shape[0]
 
-    if cov_cols is not None:
-        assert False, "TODO"
-        cov_values = np.zeros((n_indiv, len(cov_cols)))
-        for i_cov, cov_col in enumerate(cov_cols):
-            cov_values[:, i_cov] = dset[cov_col].values
-        if cov_intercept:
-            cov_values = np.c_[np.ones((n_indiv, 1)), cov_values]
-    else:
-        cov_values = None
-        if cov_intercept:
-            cov_values = np.ones((n_indiv, 1))
-
     # build projection matrix from covariate matrix
-    if cov_values is None:
+    if cov is None:
         cov_proj_mat = np.eye(n_indiv)
     else:
         cov_proj_mat = np.eye(n_indiv) - np.linalg.multi_dot(
-            [cov_values, np.linalg.inv(np.dot(cov_values.T, cov_values)), cov_values.T]
+            [cov, np.linalg.inv(np.dot(cov.T, cov)), cov.T]
         )
 
     if pheno.ndim == 1:
@@ -397,21 +376,25 @@ def estimate_genetic_cor(
             response,
         )
 
-        # variance-covariance matrix
-        inv_design = linalg.inv(design)
-        Sigma = np.zeros_like(grm_list[0])
-        for i in range(n_grm):
-            Sigma += var_comp[i] * grm_list[i]
-        Sigma_grm_list = [np.dot(Sigma, grm) for grm in grm_list]
+        VARCOV = False
+        if VARCOV:
+            # variance-covariance matrix
+            inv_design = linalg.inv(design)
+            Sigma = np.zeros_like(grm_list[0])
+            for i in range(n_grm):
+                Sigma += var_comp[i] * grm_list[i]
+            Sigma_grm_list = [np.dot(Sigma, grm) for grm in grm_list]
 
-        var_response = np.zeros((n_grm, n_grm))
-        for i in range(n_grm):
-            for j in range(n_grm):
-                if i <= j:
-                    var_response[i, j] = (
-                        2 * (Sigma_grm_list[i] * Sigma_grm_list[j]).sum()
-                    )
-                    var_response[j, i] = var_response[i, j]
-        var_comp_var = np.linalg.multi_dot([inv_design, var_response, inv_design])
-        rls_list.append((var_comp, var_comp_var))
+            var_response = np.zeros((n_grm, n_grm))
+            for i in range(n_grm):
+                for j in range(n_grm):
+                    if i <= j:
+                        var_response[i, j] = (
+                            2 * (Sigma_grm_list[i] * Sigma_grm_list[j]).sum()
+                        )
+                        var_response[j, i] = var_response[i, j]
+            var_comp_var = np.linalg.multi_dot([inv_design, var_response, inv_design])
+            rls_list.append((var_comp, var_comp_var))
+        else:
+            rls_list.append(var_comp)
     return rls_list
