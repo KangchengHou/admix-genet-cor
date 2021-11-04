@@ -7,6 +7,7 @@ import pandas as pd
 from scipy import linalg
 from tqdm import tqdm
 from .locus import test_snp_het, test_snp_assoc
+from .utils import load_page_hm3
 
 
 def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
@@ -309,10 +310,7 @@ def compute_grm(geno, lanc, n_anc=2, snp_prior_var=None, apa_center=False):
 
 
 def estimate_genetic_cor(
-    A1,
-    A2,
-    pheno: np.ndarray,
-    cov: np.ndarray = None,
+    A1, A2, pheno: np.ndarray, cov: np.ndarray = None, compute_varcov: bool = False
 ):
     """Estimate genetic correlation given a dataset, phenotypes, and covariates.
     This is a very specialized function that tailed for estimating the genetic correlation
@@ -353,7 +351,7 @@ def estimate_genetic_cor(
     quad_form_func = lambda x, A: np.dot(np.dot(x.T, A), x)
 
     grm_list = [A1, A2, np.eye(n_indiv)]
-    grm_list = [np.dot(grm, cov_proj_mat) for grm in grm_list]
+    grm_list = [cov_proj_mat @ grm @ cov_proj_mat for grm in grm_list]
 
     # multiply cov_proj_mat
     n_grm = len(grm_list)
@@ -376,8 +374,7 @@ def estimate_genetic_cor(
             response,
         )
 
-        VARCOV = False
-        if VARCOV:
+        if compute_varcov:
             # variance-covariance matrix
             inv_design = linalg.inv(design)
             Sigma = np.zeros_like(grm_list[0])
