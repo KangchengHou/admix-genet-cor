@@ -22,8 +22,8 @@ def load_page_hm3(
         chrom = np.arange(1, 23)
     elif isinstance(chrom, List):
         chrom = np.array(chrom)
-    elif isinstance(chrom, int):
-        chrom = np.aarray([chrom])
+    elif isinstance(chrom, int) or isinstance(chrom, np.integer):
+        chrom = np.array([chrom])
     else:
         raise ValueError("chrom must be None, List or int")
 
