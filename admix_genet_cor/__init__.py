@@ -8,29 +8,9 @@ from scipy import linalg
 from tqdm import tqdm
 from .locus import test_snp_het, test_snp_assoc
 from .utils import load_page_hm3
+from admix.data import calc_snp_prior_var
 
-def calc_snp_prior_var(df_snp_info, her_model):
-    """
-    Calculate the SNP prior variance from SNP information
-    """
-    assert her_model in ["uniform", "gcta", "ldak", "mafukb"]
-    if her_model == "uniform":
-        return np.ones(len(df_snp_info))
-    elif her_model == "gcta":
-        freq = df_snp_info["FREQ"].values
-        assert np.all(freq > 0), "frequencies should be larger than zero"
-        return np.float_power(freq * (1 - freq), -1)
-    elif her_model == "mafukb":
-        # MAF-dependent genetic architecture, \alpha = -0.38 estimated from meta-analysis in UKB traits
-        freq = df_snp_info["FREQ"].values
-        assert np.all(freq > 0), "frequencies should be larger than zero"
-        return np.float_power(freq * (1 - freq), -0.38)
-    elif her_model == "ldak":
-        freq, weight = df_snp_info["FREQ"].values, df_snp_info["LDAK_WEIGHT"].values
-        return np.float_power(freq * (1 - freq), -0.25) * weight
-    else:
-        raise NotImplementedError
-        
+
 def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
     """
     Calculate allele frequency per ancestry
@@ -90,7 +70,7 @@ def allele_per_anc(geno, lanc, center=False, n_anc=2):
     assert geno.ndim == 3, "`hap` and `lanc` should have three dimension"
     n_snp, n_indiv, n_haplo = geno.shape
     assert n_haplo == 2, "`n_haplo` should equal to 2, check your data"
-
+    assert center is False, "`center` is not implemented"
     assert isinstance(geno, da.Array) & isinstance(
         lanc, da.Array
     ), "`geno` and `lanc` should be dask array"
@@ -150,7 +130,7 @@ def allele_per_anc(geno, lanc, center=False, n_anc=2):
     return rls_allele_per_anc
 
 
-def simulate_continuous_pheno(
+def simulate_quant_pheno(
     geno,
     lanc,
     n_anc=2,
@@ -160,7 +140,6 @@ def simulate_continuous_pheno(
     beta: np.ndarray = None,
     snp_prior_var: np.ndarray = None,
     n_sim=10,
-    apa_center=False,
 ) -> dict:
     """Simulate continuous phenotype of admixed individuals [continuous]
 
@@ -199,7 +178,7 @@ def simulate_continuous_pheno(
         simulated phenotype (n_indiv, n_sim)
     """
     assert n_anc == 2, "Only two-ancestry currently supported"
-    apa = allele_per_anc(geno, lanc, center=apa_center)
+    apa = allele_per_anc(geno, lanc)
     n_snp, n_indiv = apa.shape[0:2]
 
     # simulate effect sizes
