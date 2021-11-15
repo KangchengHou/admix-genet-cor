@@ -6,7 +6,7 @@ import dask
 import pandas as pd
 from scipy import linalg
 from tqdm import tqdm
-from .locus import test_snp_het, test_snp_assoc
+from .locus import test_snp_het, test_snp_assoc, marginal_het, calc_cov, calc_apa_cov
 from .utils import load_page_hm3
 from admix.data import calc_snp_prior_var
 
