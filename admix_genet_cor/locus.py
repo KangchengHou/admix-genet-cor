@@ -130,7 +130,7 @@ def simulate_hetero_assoc(
     # format data
     np.random.seed(42)
     geno, df_snp, df_indiv = dapgen.read_pfile(pfile, phase=True, snp_chunk=1024)
-    lanc = admix.io.read_lanc(pfile + ".lanc", snp_chunk=1024)
+    lanc = admix.io.read_lanc(pfile + ".lanc").dask(snp_chunk=1024)
     df_snp_info = pd.read_csv(pfile + ".snp_info", sep="\t").set_index("SNP")
     assert np.all(df_snp_info.index == df_snp.index.values)
     df_snp = pd.merge(df_snp, df_snp_info, left_index=True, right_index=True)
@@ -161,7 +161,8 @@ def simulate_hetero_assoc(
 
     # simulate phenotype
     beta = np.zeros((n_eff_snp, 2, 1))  # (n_snp, n_anc, n_sim)
-    beta[causal_idx, :, :] = 1.0
+    # use position of SNP to determine the beta sign (to add some randomness)
+    beta[causal_idx, :, :] = (-1) ** (df_snp.POS.iloc[causal_idx] % 2) 
 
     sim = simulate_quant_pheno(geno=geno, lanc=lanc, hsq=hsq, beta=beta, n_sim=1)
     pheno = sim["pheno"].flatten()
@@ -172,7 +173,7 @@ def simulate_hetero_assoc(
         y=pheno,
     )
 
-    df_rls["assoc_pval"] = admix.assoc.marginal_fast(
+    df_rls["assoc_pval"] = admix.assoc.marginal(
         geno=geno, lanc=lanc, pheno=pheno, cov=None
     )
     df_rls["causal_snp"] = causal_snp
@@ -181,3 +182,62 @@ def simulate_hetero_assoc(
     df_rls = df_rls.sort_values("assoc_pval").iloc[0:n_top_snp]
     df_rls["assoc_pval_rank"] = np.arange(n_top_snp)
     return df_rls
+
+
+
+def tls(x, y):
+    # https://gist.github.com/RyotaBannai/db4d26f7c3c3029e320ae1d28864b36c
+    """
+    x: np.ndarray
+    y: np.ndarray
+    """
+    import numpy.linalg as la
+    
+    X = np.zeros((len(x), 2))
+    X[:, 0] = 1.0  # intercept
+    X[:, 1] = x
+    n = np.array(X).shape[1]
+
+    Z = np.vstack((X.T, y)).T
+    U, s, Vt = la.svd(Z, full_matrices=True)
+
+    V = Vt.T
+    Vxy = V[:n, n:]
+    Vyy = V[n:, n:]
+    a_tls = -Vxy / Vyy  # total least squares soln
+
+    Xtyt = -Z.dot(V[:, n:]).dot(V[:, n:].T)
+    Xt = Xtyt[:, :n]  # X error
+    y_tls = (X + Xt).dot(a_tls)
+    fro_norm = la.norm(Xtyt, "fro")
+    # slope and intercept
+    return [a_tls[1], a_tls[0]]
+
+from scipy.odr import Model, Data, ODR
+from scipy.stats import linregress
+import numpy as np
+
+def orthoregress(x, y):
+    """Perform an Orthogonal Distance Regression on the given data,
+    using the same interface as the standard scipy.stats.linregress function.
+    Arguments:
+    x: x data
+    y: y data
+    Returns:
+    [m, c, nan, nan, nan]
+    Uses standard ordinary least squares to estimate the starting parameters
+    then uses the scipy.odr interface to the ODRPACK Fortran code to do the
+    orthogonal distance calculations.
+    """
+
+    def f(p, x):
+        """Basic linear regression 'model' for use with ODR"""
+        return (p[0] * x) + p[1]
+
+    linreg = linregress(x, y)
+    mod = Model(f)
+    dat = Data(x, y)
+    od = ODR(dat, mod, beta0=linreg[0:2])
+    out = od.run()
+    # slope and intercept
+    return list(out.beta)
