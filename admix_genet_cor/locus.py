@@ -7,6 +7,7 @@ from tqdm import tqdm
 import admix
 import pandas as pd
 import dapgen
+import scipy
 from .utils import simulate_quant_pheno
 
 
@@ -145,9 +146,9 @@ def simulate_hetero_assoc(
     )[0]
 
     df_tmp = df_snp.iloc[region_snp_idx]
-    # filter 0.001 < EUR_FREQ < 0.999 and 0.001 < AFR_FREQ < 0.999
+    # filter 0.005 < EUR_FREQ < 0.995 and 0.005 < AFR_FREQ < 0.995
     region_snp_idx = region_snp_idx[
-        df_tmp.EUR_FREQ.between(0.001, 0.999) & df_tmp.AFR_FREQ.between(0.001, 0.999)
+        df_tmp.EUR_FREQ.between(0.005, 0.995) & df_tmp.AFR_FREQ.between(0.005, 0.995)
     ]
     print(len(region_snp_idx))
 
@@ -163,7 +164,6 @@ def simulate_hetero_assoc(
     beta = np.zeros((n_eff_snp, 2, 1))  # (n_snp, n_anc, n_sim)
     # use position of SNP to determine the beta sign (to add some randomness)
     beta[causal_idx, :, :] = (-1) ** (df_snp.POS.iloc[causal_idx] % 2) 
-
     sim = simulate_quant_pheno(geno=geno, lanc=lanc, hsq=hsq, beta=beta, n_sim=1)
     pheno = sim["pheno"].flatten()
 
@@ -179,9 +179,14 @@ def simulate_hetero_assoc(
     df_rls["causal_snp"] = causal_snp
     df_rls.index = df_snp.index
     df_rls.index.name = "test_snp"
-    df_rls = df_rls.sort_values("assoc_pval").iloc[0:n_top_snp]
-    df_rls["assoc_pval_rank"] = np.arange(n_top_snp)
-    return df_rls
+    df_rls = df_rls.sort_values("assoc_pval")
+    df_rls["assoc_pval_rank"] = np.arange(len(df_rls))
+    
+    # return both the top SNPs and the causal SNP (if that is not within the top)
+    rls_snp_idx = df_rls.index[0 : n_top_snp].tolist()
+    if causal_snp not in rls_snp_idx:
+        rls_snp_idx.append(causal_snp)
+    return df_rls.loc[rls_snp_idx, :]
 
 
 
@@ -241,3 +246,9 @@ def orthoregress(x, y):
     out = od.run()
     # slope and intercept
     return list(out.beta)
+
+def deming_regression(x, y, sx=None, sy=None):
+    model = scipy.odr.unilinear
+    odr = scipy.odr.ODR(scipy.odr.RealData(x, y, sx=sx, sy=sy), model)
+    fit = odr.run()
+    return fit.beta[0], fit.beta[1]
