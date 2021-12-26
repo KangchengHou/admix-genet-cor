@@ -2,7 +2,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 from tqdm import tqdm
-import allel
+import sparse
 import numpy as np
 import fire
 from os.path import join
@@ -10,46 +10,7 @@ from typing import List
 import fire
 import statsmodels.api as sm
 import dask.array as da
-
-
-def af_per_anc(geno, lanc, n_anc=2) -> np.ndarray:
-    """
-    Calculate allele frequency per ancestry
-
-    If at one particular SNP locus, no SNP from one particular ancestry can be found
-    the corresponding entries will be filled with np.NaN.
-
-    Parameters
-    ----------
-    dset: xr.Dataset
-        Containing geno, lanc, n_anc
-
-    Returns
-    -------
-    List[np.ndarray]
-        `n_anc` length list of allele frequencies.
-    """
-    assert np.all(geno.shape == lanc.shape)
-    n_snp = geno.shape[0]
-    af = np.zeros((n_snp, n_anc))
-
-    snp_chunks = geno.chunks[0]
-    indices = np.insert(np.cumsum(snp_chunks), 0, 0)
-
-    for i in range(len(indices) - 1):
-        start, stop = indices[i], indices[i + 1]
-        geno_chunk = geno[start:stop, :, :].compute()
-        lanc_chunk = lanc[start:stop, :, :].compute()
-
-        for anc_i in range(n_anc):
-            # mask SNPs with local ancestry not `i_anc`
-            af[start:stop, anc_i] = (
-                np.ma.masked_where(lanc_chunk != anc_i, geno_chunk)
-                .sum(axis=(1, 2))
-                .data
-            ) / np.sum(lanc_chunk == anc_i, axis=(1, 2))
-
-    return af
+from admix.data import af_per_anc
 
 
 def allele_per_anc(geno, lanc, center=False, n_anc=2):
@@ -132,10 +93,10 @@ def allele_per_anc(geno, lanc, center=False, n_anc=2):
 
 
 def simulate_quant_pheno(
-    geno,
-    lanc,
-    n_anc=2,
-    hsq: float = None,
+    geno: da.Array,
+    lanc: da.Array,
+    hsq: float,
+    n_anc: int = 2,
     cor: float = None,
     n_causal: int = None,
     beta: np.ndarray = None,
@@ -146,10 +107,10 @@ def simulate_quant_pheno(
 
     Parameters
     ----------
-    dset: xr.Dataset
-        Dataset containing the following variables:
-            - geno: (n_indiv, n_snp, 2) phased genotype of each individual
-            - lanc: (n_indiv, n_snp, 2) local ancestry of each SNP
+    geno: da.Array
+        (n_indiv, n_snp, 2) phased genotype of each individual
+    lanc: da.Array
+        (n_indiv, n_snp, 2) local ancestry of each SNP
     hsq: float
         Variance explained by genotypical effects
     var_e: float
@@ -179,7 +140,7 @@ def simulate_quant_pheno(
         simulated phenotype (n_indiv, n_sim)
     """
     assert n_anc == 2, "Only two-ancestry currently supported"
-    apa = allele_per_anc(geno, lanc)
+    apa = allele_per_anc(geno, lanc, n_anc=n_anc)
     n_snp, n_indiv = apa.shape[0:2]
 
     # simulate effect sizes
@@ -200,6 +161,7 @@ def simulate_quant_pheno(
         if snp_prior_var is None:
             snp_prior_var = np.ones(n_snp)
 
+        # TODO: also change to sparse implementation
         # if `beta` is not specified, simulate effect sizes
         beta = np.zeros((n_snp, n_anc, n_sim))
         for i_sim in range(n_sim):
@@ -221,14 +183,14 @@ def simulate_quant_pheno(
         assert (cor is None) and (
             n_causal is None
         ), "If `beta` is specified, `cor`, and `n_causal` must not be specified"
-        assert beta.shape == (n_snp, n_anc) or beta.shape == (
+        assert beta.shape == (
             n_snp,
             n_anc,
             n_sim,
-        ), "`beta` must be of shape (n_snp, n_anc) or (n_snp, n_anc, n_sim)"
-        if beta.shape == (n_snp, n_anc):
-            # replicate `beta` for each simulation
-            beta = np.repeat(beta[:, :, np.newaxis], n_sim, axis=2)
+        ), "`beta` must be of shape (n_snp, n_anc, n_sim)"
+        # if beta.shape == (n_snp, n_anc):
+        #     # replicate `beta` for each simulation
+        #     beta = np.repeat(beta[:, :, np.newaxis], n_sim, axis=2)
 
     pheno_g = np.zeros([n_indiv, n_sim])
     snp_chunks = apa.chunks[0]
@@ -257,145 +219,7 @@ def simulate_quant_pheno(
     return {"beta": beta, "pheno_g": pheno_g, "pheno": pheno}
 
 
-# PAGE analysis
-def load_page_hm3(
-    chrom=None,
-    GENO_DIR="/u/project/pasaniuc/pasaniucdata/admixture/projects/PAGE-QC/s03_aframr/dataset/hm3.zarr/",
-    PHENO_DIR="/u/project/sgss/PAGE/phenotype/",
-):
-    if chrom is None:
-        chrom = np.arange(1, 23)
-    elif isinstance(chrom, List):
-        chrom = np.array(chrom)
-    elif isinstance(chrom, int) or isinstance(chrom, np.integer):
-        chrom = np.array([chrom])
-    else:
-        raise ValueError("chrom must be None, List or int")
-
-    trait_cols = [
-        # Inflammtory traits
-        "crp",
-        "total_wbc_cnt",
-        "mean_corp_hgb_conc",
-        "platelet_cnt",
-        # lipid traits
-        "hdl",
-        "ldl",
-        "triglycerides",
-        "total_cholesterol",
-        # lifestyle traits
-        "cigs_per_day_excl_nonsmk_updated",
-        "coffee_cup_day",
-        # glycemic traits
-        "a1c",
-        "insulin",
-        "glucose",
-        "t2d_status",
-        # electrocardiogram traits
-        "qt_interval",
-        "qrs_interval",
-        "pr_interval",
-        # blood pressure traits
-        "systolic_bp",
-        "diastolic_bp",
-        "hypertension",
-        # anthropometric traits
-        "waist_hip_ratio",
-        "height",
-        "bmi",
-        # kidney traits
-        "egfrckdepi",
-    ]
-
-    covar_cols = ["study", "age", "sex", "race_ethnicity", "center"] + [
-        f"geno_EV{i}" for i in range(1, 51)
-    ]
-
-    race_encoding = {
-        1: "Unclassified",
-        2: "African American",
-        3: "Hispanic/Latino",
-        4: "Asian",
-        5: "Native Hawaiian",
-        6: "Native American",
-        7: "Other",
-    }
-
-    race_color = {
-        "Unclassified": "#ffffff",
-        "African American": "#e9d16a",
-        "Hispanic/Latino": "#9a3525",
-        "Asian": "#3c859d",
-        "Native Hawaiian": "#959f6e",
-        "Native American": "#546f7b",
-        "Other": "#d07641",
-    }
-
-    df_pheno = pd.read_csv(
-        join(PHENO_DIR, "MEGA_page-harmonized-phenotypes-pca-freeze2-2016-12-14.txt"),
-        sep="\t",
-        na_values=".",
-        low_memory=False,
-    )
-    df_pheno["race_ethnicity"] = df_pheno["race_ethnicity"].map(race_encoding)
-
-    dset_list = []
-    for i_chr in tqdm(chrom):
-        dset_list.append(xr.open_zarr(join(GENO_DIR, f"chr{i_chr}.zip")))
-
-    dset = xr.concat(dset_list, dim="snp")
-
-    df_aframr_pheno = df_pheno.set_index("PAGE_Subject_ID").loc[
-        dset.indiv.values, trait_cols + covar_cols
-    ]
-
-    for col in df_aframr_pheno.columns:
-        dset[f"{col}@indiv"] = ("indiv", df_aframr_pheno[col].values)
-
-    for col in ["center", "study", "race_ethnicity"]:
-        dset[f"{col}@indiv"] = dset[f"{col}@indiv"].astype(str)
-
-    # format the dataset to follow the new standards
-    for k in dset.data_vars.keys():
-        if k.endswith("@indiv"):
-            dset.coords[k.split("@")[0]] = ("indiv", dset.data_vars[k].data)
-        if k.endswith("@snp"):
-            dset.coords[k.split("@")[0]] = ("snp", dset.data_vars[k].data)
-    dset = dset.drop_vars(
-        [
-            k
-            for k in dset.data_vars.keys()
-            if (k.endswith("@indiv") or k.endswith("@snp"))
-        ]
-    )
-
-    dset = dset.rename({n: n.split("@")[0] for n in [k for k in dset.coords.keys()]})
-
-    return dset
-
-
-def concat_grm(out_dir="out/admix_grm"):
-    dset = load_hm3()
-    n_indiv = dset.dims["indiv"]
-    n_total_snp = dset.dims["snp"]
-    K1 = np.zeros((n_indiv, n_indiv))
-    K2 = np.zeros((n_indiv, n_indiv))
-    K12 = np.zeros((n_indiv, n_indiv))
-
-    for chr_i in tqdm(range(1, 23)):
-        n_chr_snp = np.char.startswith(dset["snp"].values, f"chr{chr_i}:").sum()
-        K1 += np.load(join(out_dir, f"K1.chr{chr_i}.npy")) * n_chr_snp
-        K2 += np.load(join(out_dir, f"K2.chr{chr_i}.npy")) * n_chr_snp
-        K12 += np.load(join(out_dir, f"K12.chr{chr_i}.npy")) * n_chr_snp
-
-    np.save(join(out_dir, "K1.all.npy"), K1 / n_total_snp)
-    np.save(join(out_dir, "K2.all.npy"), K2 / n_total_snp)
-    np.save(join(out_dir, "K12.all.npy"), K12 / n_total_snp)
-
-
 # loci heterogeneity analysis
-
-
 def simulate_het(apa, beta, cov):
     cov_effects = np.random.normal(loc=0, scale=0.1, size=cov.shape[1])
     y = (
@@ -404,7 +228,3 @@ def simulate_het(apa, beta, cov):
         + np.random.normal(size=apa.shape[0])
     )
     return y
-
-
-if __name__ == "__main__":
-    fire.Fire()
