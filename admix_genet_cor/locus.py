@@ -76,16 +76,18 @@ def marginal_het(geno, lanc, y, cov=None):
     """
     apa = admix.data.allele_per_anc(geno, lanc, n_anc=2).compute()
     n_snp, n_indiv, n_anc = apa.shape
-
+    assert n_anc == 2, "only two-ancestry difference test is supported for now"
     if cov is None:
         design = np.ones((n_indiv, 1))
     else:
         design = np.hstack([np.ones((n_indiv, 1)), cov])
+    # design: [intercept] [covariates] [anc1-allele, anc2-allele, ...]
     design = np.hstack([design, np.zeros((n_indiv, n_anc))])
 
     A = np.zeros([1, design.shape[1]])
-    A[0, 1] = 1
-    A[0, 2] = -1
+    
+    A[0, -2] = 1
+    A[0, -1] = -1
 
     df_rls = {"het_pval": [], "coef1": [], "se1": [], "coef2": [], "se2": []}
     pvals = np.zeros(n_snp)
@@ -95,8 +97,8 @@ def marginal_het(geno, lanc, y, cov=None):
         model = sm.OLS(y, design).fit()
         df_rls["het_pval"].append(model.f_test(A).pvalue.item())
         for anc_i in range(2):
-            df_rls[f"coef{anc_i + 1 }"].append(model.params[anc_i + 1])
-            df_rls[f"se{anc_i + 1}"].append(model.bse[anc_i + 1])
+            df_rls[f"coef{anc_i + 1}"].append(model.params[len(model.params) - 2 + anc_i])
+            df_rls[f"se{anc_i + 1}"].append(model.bse[len(model.params) - 2 + anc_i])
 
     return pd.DataFrame(df_rls)
 
