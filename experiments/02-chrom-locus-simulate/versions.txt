@@ -1,0 +1,2 @@
+- OLD-out: simulation where i specify h2 per variants, which i don't think is realistic.
+- out: simulation where i specify h2 per chromosome = 0.025, 0.05, 0.1

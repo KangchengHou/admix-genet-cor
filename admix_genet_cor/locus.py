@@ -30,19 +30,19 @@ def calc_apa_cov(apa, m):
     # center apa
     apa = apa - apa.mean(axis=1)[:, None, :]
     m = m - m.mean()
-
+    ex_list = np.zeros((n_snp, 2))
     z_list = np.zeros(n_snp)
     # for each snp, calculate the covariance
     transform_vec = np.array([[1], [-1]])
     for snp_i in tqdm(range(n_snp)):
-        cov_inv = np.linalg.inv(np.cov(apa[snp_i, :, :], rowvar=False))
+        cov_inv = np.linalg.inv(np.cov(apa[snp_i, :, :], rowvar=False, ddof=0))
         # expectation and variance
         ex = cov_inv @ apa[snp_i, :, :].T @ m
-        #         z_list[snp_i] = transform_vec.T @ ex
+        ex_list[snp_i, :] = ex
         z_list[snp_i] = (
             transform_vec.T @ ex / np.sqrt(transform_vec.T @ cov_inv @ transform_vec)
         )
-    return z_list
+    return z_list, ex_list
 
 
 def test_snp_het(apa, y, cov=None):
@@ -85,7 +85,7 @@ def marginal_het(geno, lanc, y, cov=None):
     design = np.hstack([design, np.zeros((n_indiv, n_anc))])
 
     A = np.zeros([1, design.shape[1]])
-    
+
     A[0, -2] = 1
     A[0, -1] = -1
 
@@ -97,7 +97,9 @@ def marginal_het(geno, lanc, y, cov=None):
         model = sm.OLS(y, design).fit()
         df_rls["het_pval"].append(model.f_test(A).pvalue.item())
         for anc_i in range(2):
-            df_rls[f"coef{anc_i + 1}"].append(model.params[len(model.params) - 2 + anc_i])
+            df_rls[f"coef{anc_i + 1}"].append(
+                model.params[len(model.params) - 2 + anc_i]
+            )
             df_rls[f"se{anc_i + 1}"].append(model.bse[len(model.params) - 2 + anc_i])
 
     return pd.DataFrame(df_rls)
@@ -165,7 +167,7 @@ def simulate_hetero_assoc(
     # simulate phenotype
     beta = np.zeros((n_eff_snp, 2, 1))  # (n_snp, n_anc, n_sim)
     # use position of SNP to determine the beta sign (to add some randomness)
-    beta[causal_idx, :, :] = (-1) ** (df_snp.POS.iloc[causal_idx] % 2) 
+    beta[causal_idx, :, :] = (-1) ** (df_snp.POS.iloc[causal_idx] % 2)
     sim = simulate_quant_pheno(geno=geno, lanc=lanc, hsq=hsq, beta=beta, n_sim=1)
     pheno = sim["pheno"].flatten()
 
@@ -183,13 +185,12 @@ def simulate_hetero_assoc(
     df_rls.index.name = "test_snp"
     df_rls = df_rls.sort_values("assoc_pval")
     df_rls["assoc_pval_rank"] = np.arange(len(df_rls))
-    
+
     # return both the top SNPs and the causal SNP (if that is not within the top)
-    rls_snp_idx = df_rls.index[0 : n_top_snp].tolist()
+    rls_snp_idx = df_rls.index[0:n_top_snp].tolist()
     if causal_snp not in rls_snp_idx:
         rls_snp_idx.append(causal_snp)
     return df_rls.loc[rls_snp_idx, :]
-
 
 
 def tls(x, y):
@@ -199,7 +200,7 @@ def tls(x, y):
     y: np.ndarray
     """
     import numpy.linalg as la
-    
+
     X = np.zeros((len(x), 2))
     X[:, 0] = 1.0  # intercept
     X[:, 1] = x
@@ -220,9 +221,11 @@ def tls(x, y):
     # slope and intercept
     return [a_tls[1], a_tls[0]]
 
+
 from scipy.odr import Model, Data, ODR
 from scipy.stats import linregress
 import numpy as np
+
 
 def orthoregress(x, y):
     """Perform an Orthogonal Distance Regression on the given data,
@@ -248,6 +251,7 @@ def orthoregress(x, y):
     out = od.run()
     # slope and intercept
     return list(out.beta)
+
 
 def deming_regression(x, y, sx=None, sy=None):
     model = scipy.odr.unilinear
