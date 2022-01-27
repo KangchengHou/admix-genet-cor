@@ -253,8 +253,17 @@ def orthoregress(x, y):
     return list(out.beta)
 
 
-def deming_regression(x, y, sx=None, sy=None):
-    model = scipy.odr.unilinear
-    odr = scipy.odr.ODR(scipy.odr.RealData(x, y, sx=sx, sy=sy), model)
-    fit = odr.run()
-    return fit.beta[0], fit.beta[1]
+def deming_regression(x, y, sx=None, sy=None, no_intercept=False):
+    def no_intercept_func(B, x):
+        return B[0] * x
+
+    if no_intercept:
+        model = scipy.odr.Model(no_intercept_func)
+        odr = scipy.odr.ODR(scipy.odr.RealData(x, y, sx=sx, sy=sy), model, beta0=[1])
+        fit = odr.run()
+        return fit.beta[0]
+    else:
+        model = scipy.odr.unilinear
+        odr = scipy.odr.ODR(scipy.odr.RealData(x, y, sx=sx, sy=sy), model)
+        fit = odr.run()
+        return fit.beta[0], fit.beta[1]
