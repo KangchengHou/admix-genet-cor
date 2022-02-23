@@ -14,7 +14,7 @@ from .locus import (
     calc_apa_cov,
     simulate_hetero_assoc,
 )
-from .utils import simulate_quant_pheno, af_per_anc, allele_per_anc
+from .utils import simulate_quant_pheno, af_per_anc, allele_per_anc, hdi
 from admix.data import calc_snp_prior_var
 
 

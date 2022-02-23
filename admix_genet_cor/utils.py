@@ -13,6 +13,31 @@ import dask.array as da
 from admix.data import af_per_anc
 
 
+def hdi(x, loglik, ci=0.95):
+    """
+    Find the high density interval
+    """
+    prob = np.exp(loglik - np.max(loglik))
+    prob /= prob.sum()
+    sorted_prob = np.sort(prob)[::-1]
+    # critical value
+    crit = sorted_prob[np.argmax(np.cumsum(sorted_prob) >= ci)]
+    np.where(prob > crit)
+    hdi_index = np.where(prob > crit)[0]
+
+    from itertools import groupby
+    from operator import itemgetter
+
+    intervals = []
+    for k, g in groupby(enumerate(hdi_index), lambda ix: ix[0] - ix[1]):
+        hdi_index = list(map(itemgetter(1), g))
+        intervals.append((x[hdi_index[0]], x[hdi_index[-1]]))
+    if len(intervals) == 1:
+        return intervals[0]
+    else:
+        return intervals
+
+
 def allele_per_anc(geno, lanc, center=False, n_anc=2):
     """Get allele count per ancestry
 
@@ -102,6 +127,7 @@ def simulate_quant_pheno(
     beta: np.ndarray = None,
     snp_prior_var: np.ndarray = None,
     n_sim=10,
+    verbose=True,
 ) -> dict:
     """Simulate continuous phenotype of admixed individuals [continuous]
 
@@ -197,7 +223,9 @@ def simulate_quant_pheno(
     indices = np.insert(np.cumsum(snp_chunks), 0, 0)
 
     for i in tqdm(
-        range(len(indices) - 1), desc="admix_genet_cor.simulate_continuous_pheno"
+        range(len(indices) - 1),
+        desc="admix_genet_cor.simulate_continuous_pheno",
+        disable=not verbose,
     ):
         start, stop = indices[i], indices[i + 1]
         apa_chunk = apa[start:stop, :, :].compute()

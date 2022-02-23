@@ -1,4 +1,6 @@
 DEPRECATED*/
+cache/
+*.pkl
 *.npy
 *.tsv
 *.egg-info
