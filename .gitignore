@@ -10,6 +10,7 @@ gcta64
 gcta_nr_robust
 job_out
 out/
+out*/
 OLD*/
 # Jupyter Notebook
 .ipynb_checkpoints
