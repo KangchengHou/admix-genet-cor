@@ -12,6 +12,7 @@ job_out
 out/
 out*/
 OLD*/
+OLD*
 # Jupyter Notebook
 .ipynb_checkpoints
 
